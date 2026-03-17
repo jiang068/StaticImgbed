@@ -1,11 +1,12 @@
-# CFPages 静态图床生成工具
+# StaticImgbed 
 
-这是一个专为 **Cloudflare Pages** 设计的图床预处理脚本。它可以自动化地帮你完成图片重命名、尺寸缩放、体积压缩、横竖版自动分类，并生成一个支持 **懒加载** 和 **一键复制链接** 的优美索引网页。
+### 静态图床生成工具
+这是一个静态图床预处理脚本。它可以自动化地帮你完成图片重命名、尺寸缩放、体积压缩、横竖版自动分类，并生成一个支持 **懒加载** 和 **一键复制链接** 的优美索引网页。
 
 ---
 ## ✨ 功能特性
 
-- **极速部署**：一键生成 `output` 目录，直接上传 Cloudflare Pages 即可使用。
+- **极速部署**：一键生成 `output` 目录，直接上传 Cloudflare Pages 等即可使用。
 - **智能压缩**：自动控制单图大小（默认 < 800KB），超过 1920px 的图片自动缩放，无损格式转换。
 - **自动分类**：支持多级文件夹扫描，并自动分离“横版图片”到专属目录。
 - **对称算法**：基于文件哈希命名，内容不变不重复处理，极速节省算力。
@@ -18,7 +19,7 @@
 ### 1. 克隆项目
 ```bash
 git clone [https://github.com/您的用户名/cfpages-img-bed.git](https://github.com/您的用户名/cfpages-img-bed.git)
-cd cfpages-img-bed
+cd StaticImgbed
 ```
 ### 2. 安装依赖
 ```Bash
@@ -40,7 +41,7 @@ output_format     强制统一的输出格式 (如 jpg, webp)
 ```Bash
 uv python main.py
 ```
-处理完成后，将生成的 `output/` 文件夹上传至 `Cloudflare Pages` 即可。  
+处理完成后，将生成的 `output/` 文件夹上传至 `Cloudflare Pages` 等运营商即可。  
 
 ---
 
