@@ -1,0 +1,22 @@
+# 忽略 Python 运行缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 忽略本地输入目录（防止上传原图私照）
+input/
+
+# 忽略输出目录（部署时手动上传）
+output/
+
+# 忽略本地虚拟环境
+venv/
+.venv/
+env/
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# 配置文件
+# config.toml
