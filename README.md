@@ -18,7 +18,7 @@
 
 ### 1. 克隆项目
 ```bash
-git clone [https://github.com/您的用户名/cfpages-img-bed.git](https://github.com/您的用户名/cfpages-img-bed.git)
+git clone https://github.com/jiang068/StaticImgbed.git
 cd StaticImgbed
 ```
 ### 2. 安装依赖
