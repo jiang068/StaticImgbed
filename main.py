@@ -278,41 +278,49 @@ def generate_index_html(image_paths):
     print(f"\n[完成] 主页及 {len(groups)} 个子页已生成完毕！")
 
 def generate_random_api(image_paths):
-    """生成 Cloudflare Pages Function 以实现 /random 随机图接口"""
-    # Cloudflare Pages 规定函数必须放在 functions 目录下
-    func_dir = os.path.join(OUTPUT_DIR, "functions")
-    os.makedirs(func_dir, exist_ok=True)
-
+    """使用 Cloudflare Pages 高级模式 (_worker.js) 实现动态路由"""
+    worker_path = os.path.join(OUTPUT_DIR, "_worker.js")
+    
     # 格式化所有图片路径为绝对路径形式 (例如: /landscape/abc.jpg)
     paths_array = json.dumps([f"/{p.replace(os.sep, '/')}" for p in image_paths])
 
-    # 编写 Cloudflare Worker / Pages Function 脚本代码
-    js_content = f"""export async function onRequest(context) {{
-    // 由 Python 自动注入的所有图片路径池
-    const images = {paths_array};
-    
-    // 随机选择一张
-    const randomIndex = Math.floor(Math.random() * images.length);
-    const randomImage = images[randomIndex];
-    
-    // 构建完整 URL 并返回 302 重定向
-    const url = new URL(randomImage, context.request.url);
-    
-    // 为了防止浏览器缓存同一个随机结果，添加禁止缓存的 Header
-    return new Response(null, {{
-        status: 302,
-        headers: {{
-            "Location": url.toString(),
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache"
+    # 编写 Worker 脚本代码
+    js_content = f"""export default {{
+    async fetch(request, env) {{
+        const url = new URL(request.url);
+        
+        // 拦截 /random 接口
+        if (url.pathname === '/random') {{
+            const images = {paths_array};
+            if (images.length === 0) {{
+                return new Response('没有找到图片', {{ status: 404 }});
+            }}
+            
+            // 随机选择一张
+            const randomIndex = Math.floor(Math.random() * images.length);
+            const randomImage = images[randomIndex];
+            
+            // 构建完整 URL 并返回 302 重定向
+            const redirectUrl = new URL(randomImage, request.url);
+            
+            return new Response(null, {{
+                status: 302,
+                headers: {{
+                    "Location": redirectUrl.toString(),
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache"
+                }}
+            }});
         }}
-    }});
-}}
+        
+        // 对于不是 /random 的正常请求，放行给静态文件系统处理
+        return env.ASSETS.fetch(request);
+    }}
+}};
 """
-    api_path = os.path.join(func_dir, "random.js")
-    with open(api_path, "w", encoding="utf-8") as f:
+    with open(worker_path, "w", encoding="utf-8") as f:
         f.write(js_content)
-    print(f"\n[完成] 随机图 API 接口已生成 -> functions/random.js")
+    print(f"\n[完成] 随机图 API 已生成 -> _worker.js")
 
 def main():
     os.makedirs(INPUT_DIR, exist_ok=True)
