@@ -18,7 +18,7 @@ except ImportError:
 # --- 目录常量 ---
 INPUT_DIR = "input"
 OUTPUT_DIR = "output"
-PAGES_DIR_NAME = "pages" # 子页存放文件夹
+PAGES_DIR_NAME = "pages"
 LANDSCAPE_DIR_NAME = "landscape"
 CONFIG_FILE = "config.toml"
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
@@ -28,9 +28,10 @@ def load_config():
         print(f"找不到 {CONFIG_FILE}，请确保它在根目录。")
         exit(1)
     with open(CONFIG_FILE, "rb") as f:
-        return tomllib.load(f)["image"]
+        return tomllib.load(f)
 
 def get_file_hash(filepath, length):
+    """通过读取文件内容计算哈希，作为唯一且固定的文件名"""
     hasher = hashlib.md5()
     with open(filepath, 'rb') as f:
         buf = f.read(65536)
@@ -40,13 +41,15 @@ def get_file_hash(filepath, length):
     return hasher.hexdigest()[:length]
 
 def get_existing_outputs():
+    """扫描输出目录，建立已经处理过的图片索引，避免重复计算"""
     existing = {}
     if not os.path.exists(OUTPUT_DIR):
         return existing
     
     for root, _, files in os.walk(OUTPUT_DIR):
         for file in files:
-            if file.endswith(".html"): # 忽略 HTML 索引文件
+            # 忽略非图片文件
+            if file.endswith((".html", ".js", ".txt")):
                 continue
             name_without_ext = os.path.splitext(file)[0]
             rel_path = os.path.relpath(os.path.join(root, file), OUTPUT_DIR)
@@ -54,8 +57,11 @@ def get_existing_outputs():
     return existing
 
 def process_image(input_path, config, existing_outputs):
-    img_name = get_file_hash(input_path, config["name_length"])
+    """核心图片处理逻辑"""
+    img_cfg = config["image"]
+    img_name = get_file_hash(input_path, img_cfg["name_length"])
     
+    # 命中缓存：文件内容未变，直接返回已有路径
     if img_name in existing_outputs:
         print(f"[跳过] 已存在: {input_path} -> {existing_outputs[img_name]}")
         return existing_outputs[img_name]
@@ -64,15 +70,17 @@ def process_image(input_path, config, existing_outputs):
         file_size_kb = os.path.getsize(input_path) / 1024
         original_ext = os.path.splitext(input_path)[1].lower()
         
+        # 懒加载：获取宽高等元数据
         img = Image.open(input_path)
         width, height = img.size
         is_landscape = width >= height
 
+        # 检查格式是否一致
         format_ok = True
         out_ext = original_ext
         
-        if config["convert_format"]:
-            target_ext = f".{config['output_format']}".lower()
+        if img_cfg["convert_format"]:
+            target_ext = f".{img_cfg['output_format']}".lower()
             out_ext = target_ext
             
             if target_ext == original_ext:
@@ -82,9 +90,10 @@ def process_image(input_path, config, existing_outputs):
             else:
                 format_ok = False
 
-        size_ok = file_size_kb <= config["max_file_size_kb"]
-        dimension_ok = max(width, height) <= config["max_dimension"]
+        size_ok = file_size_kb <= img_cfg["max_file_size_kb"]
+        dimension_ok = max(width, height) <= img_cfg["max_dimension"]
 
+        # 确定输出子目录
         if is_landscape:
             out_rel_dir = LANDSCAPE_DIR_NAME
         else:
@@ -95,6 +104,7 @@ def process_image(input_path, config, existing_outputs):
         os.makedirs(out_dir, exist_ok=True)
         out_filepath = os.path.join(out_dir, f"{img_name}{out_ext}")
 
+        # 优化：免压缩直接物理复制
         if format_ok and size_ok and dimension_ok:
             img.close()
             shutil.copy2(input_path, out_filepath)
@@ -104,15 +114,16 @@ def process_image(input_path, config, existing_outputs):
             existing_outputs[img_name] = final_rel_path
             return final_rel_path
 
+        # 需要重新编码的流程
         if img.mode in ("RGBA", "P") and out_ext in (".jpg", ".jpeg"):
             img = img.convert("RGB")
 
         if not dimension_ok:
-            ratio = config["max_dimension"] / max(width, height)
+            ratio = img_cfg["max_dimension"] / max(width, height)
             new_size = (int(width * ratio), int(height * ratio))
             img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-        quality = config["jpg_quality"]
+        quality = img_cfg["jpg_quality"]
         output_format_pil = "JPEG" if out_ext in (".jpg", ".jpeg") else out_ext.replace(".", "").upper()
 
         while True:
@@ -124,7 +135,7 @@ def process_image(input_path, config, existing_outputs):
             
             new_size_kb = buffer.tell() / 1024
             
-            if new_size_kb <= config["max_file_size_kb"] or output_format_pil != "JPEG" or quality <= 15:
+            if new_size_kb <= img_cfg["max_file_size_kb"] or output_format_pil != "JPEG" or quality <= 15:
                 with open(out_filepath, "wb") as f:
                     f.write(buffer.getvalue())
                 break
@@ -140,12 +151,65 @@ def process_image(input_path, config, existing_outputs):
         print(f"[错误] 处理 {input_path} 失败: {e}")
         return None
 
+def generate_robots_txt():
+    """生成 robots.txt 以明确禁止所有爬虫抓取"""
+    robots_path = os.path.join(OUTPUT_DIR, "robots.txt")
+    with open(robots_path, "w", encoding="utf-8") as f:
+        f.write("User-agent: *\nDisallow: /")
+    print("\n[完成] robots.txt 已生成")
+
+def generate_random_api(image_paths, config):
+    """生成 Cloudflare Pages 高级模式 (_worker.js)"""
+    worker_path = os.path.join(OUTPUT_DIR, "_worker.js")
+    security_cfg = config.get("security", {})
+    api_key = security_cfg.get("api_key", "")
+    
+    paths_array = json.dumps([f"/{p.replace(os.sep, '/')}" for p in image_paths])
+
+    js_content = f"""export default {{
+    async fetch(request, env) {{
+        const url = new URL(request.url);
+        
+        if (url.pathname === '/random') {{
+            const targetKey = "{api_key}";
+            if (targetKey !== "") {{
+                const userKey = url.searchParams.get('key');
+                if (userKey !== targetKey) {{
+                    return new Response('401 Unauthorized', {{ status: 401 }});
+                }}
+            }}
+
+            const images = {paths_array};
+            if (images.length === 0) {{
+                return new Response('Not Found', {{ status: 404 }});
+            }}
+            
+            const randomImage = images[Math.floor(Math.random() * images.length)];
+            const redirectUrl = new URL(randomImage, request.url);
+            
+            return new Response(null, {{
+                status: 302,
+                headers: {{
+                    "Location": redirectUrl.toString(),
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache"
+                }}
+            }});
+        }}
+        
+        return env.ASSETS.fetch(request);
+    }}
+}};
+"""
+    with open(worker_path, "w", encoding="utf-8") as f:
+        f.write(js_content)
+    print(f"[完成] _worker.js 动态路由已生成")
+
 def generate_index_html(image_paths):
-    # 创建存放子页面的目录
+    """生成主页索引及分页子页面"""
     pages_dir = os.path.join(OUTPUT_DIR, PAGES_DIR_NAME)
     os.makedirs(pages_dir, exist_ok=True)
 
-    # 按目录分组
     groups = {}
     for path in image_paths:
         dirname = os.path.dirname(path)
@@ -154,7 +218,6 @@ def generate_index_html(image_paths):
             groups[dirname] = []
         groups[dirname].append(path)
 
-    # --- 公共 CSS 样式 ---
     common_css = """
     <style>
         :root { --primary: #007bff; --bg: #f8f9fa; --card-bg: #ffffff; --text: #333; }
@@ -165,13 +228,9 @@ def generate_index_html(image_paths):
         .back-btn:hover { background: #0056b3; }
         .nav-title { flex-grow: 1; text-align: center; margin: 0; padding-right: 80px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px; }
-        
-        /* 目录卡片样式 */
         .folder-card { background: var(--card-bg); border-radius: 10px; padding: 25px; text-align: center; text-decoration: none; color: inherit; box-shadow: 0 4px 6px rgba(0,0,0,0.05); transition: transform 0.2s, box-shadow 0.2s; border: 1px solid #e9ecef; }
         .folder-card:hover { transform: translateY(-5px); box-shadow: 0 8px 15px rgba(0,0,0,0.1); border-color: var(--primary); }
         .folder-icon { font-size: 40px; margin-bottom: 10px; }
-        
-        /* 图片卡片样式 */
         .img-card { background: var(--card-bg); border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.08); display: flex; flex-direction: column; }
         .img-container { width: 100%; aspect-ratio: 16/9; background: #eee; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         .img-container img { width: 100%; height: 100%; object-fit: contain; transition: opacity 0.3s; }
@@ -183,13 +242,10 @@ def generate_index_html(image_paths):
     </style>
     """
 
-    # --- JS 复制逻辑 ---
     copy_script = """
     <script>
         function copyUrl(btn, relPath) {
-            // 利用 URL 对象动态拼接当前网页绝对路径与相对路径，生成全链接
             const absoluteUrl = new URL(relPath, window.location.href).href;
-            
             navigator.clipboard.writeText(absoluteUrl).then(() => {
                 const originalText = btn.innerText;
                 btn.innerText = '✅ 已复制链接';
@@ -205,11 +261,10 @@ def generate_index_html(image_paths):
     </script>
     """
 
-    # 1. 生成各个子页 (HTML)
-    group_html_map = {} # 记录 分组名 -> 对应的 HTML 文件名
+    group_html_map = {}
     
+    # 1. 生成子页面
     for group_name in sorted(groups.keys()):
-        # 处理作为文件名的合法性 (替换斜杠等)
         safe_filename = group_name.replace("/", "_").replace("\\", "_") + ".html"
         group_html_map[group_name] = safe_filename
         page_path = os.path.join(pages_dir, safe_filename)
@@ -229,11 +284,9 @@ def generate_index_html(image_paths):
         ]
         
         for path in sorted(groups[group_name]):
-            # 子页在 pages/ 文件夹下，所以要回退一层 "../" 才能指向图片真实位置
             img_rel_path = f"../{path}"
             html.append('        <div class="img-card">')
             html.append(f'            <a href="{img_rel_path}" target="_blank" class="img-container">')
-            # loading="lazy" 启用现代浏览器的原生懒加载
             html.append(f'                <img src="{img_rel_path}" loading="lazy" alt="{path}">')
             html.append('            </a>')
             html.append('            <div class="info">')
@@ -247,7 +300,7 @@ def generate_index_html(image_paths):
         with open(page_path, "w", encoding="utf-8") as f:
             f.write("\n".join(html))
 
-    # 2. 生成主页 index.html (目录列表)
+    # 2. 生成主页
     main_html = [
         '<!DOCTYPE html>', '<html lang="zh-CN">', '<head>',
         '    <meta charset="UTF-8">',
@@ -275,52 +328,7 @@ def generate_index_html(image_paths):
     with open(index_path, "w", encoding="utf-8") as f:
         f.write("\n".join(main_html))
         
-    print(f"\n[完成] 主页及 {len(groups)} 个子页已生成完毕！")
-
-def generate_random_api(image_paths):
-    """使用 Cloudflare Pages 高级模式 (_worker.js) 实现动态路由"""
-    worker_path = os.path.join(OUTPUT_DIR, "_worker.js")
-    
-    # 格式化所有图片路径为绝对路径形式 (例如: /landscape/abc.jpg)
-    paths_array = json.dumps([f"/{p.replace(os.sep, '/')}" for p in image_paths])
-
-    # 编写 Worker 脚本代码
-    js_content = f"""export default {{
-    async fetch(request, env) {{
-        const url = new URL(request.url);
-        
-        // 拦截 /random 接口
-        if (url.pathname === '/random') {{
-            const images = {paths_array};
-            if (images.length === 0) {{
-                return new Response('没有找到图片', {{ status: 404 }});
-            }}
-            
-            // 随机选择一张
-            const randomIndex = Math.floor(Math.random() * images.length);
-            const randomImage = images[randomIndex];
-            
-            // 构建完整 URL 并返回 302 重定向
-            const redirectUrl = new URL(randomImage, request.url);
-            
-            return new Response(null, {{
-                status: 302,
-                headers: {{
-                    "Location": redirectUrl.toString(),
-                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-                    "Pragma": "no-cache"
-                }}
-            }});
-        }}
-        
-        // 对于不是 /random 的正常请求，放行给静态文件系统处理
-        return env.ASSETS.fetch(request);
-    }}
-}};
-"""
-    with open(worker_path, "w", encoding="utf-8") as f:
-        f.write(js_content)
-    print(f"\n[完成] 随机图 API 已生成 -> _worker.js")
+    print(f"[完成] HTML 静态索引生成完毕")
 
 def main():
     os.makedirs(INPUT_DIR, exist_ok=True)
@@ -330,7 +338,7 @@ def main():
     existing_outputs = get_existing_outputs()
     
     all_final_paths = []
-    total_size_bytes = 0  # 统计总大小
+    total_size_bytes = 0
 
     print("=== 开始处理图床图片 ===")
     for root, _, files in os.walk(INPUT_DIR):
@@ -341,7 +349,6 @@ def main():
                 result_path = process_image(input_path, config, existing_outputs)
                 if result_path:
                     all_final_paths.append(result_path)
-                    # 累加输出文件的物理大小
                     out_full_path = os.path.join(OUTPUT_DIR, result_path.replace("/", os.sep))
                     if os.path.exists(out_full_path):
                         total_size_bytes += os.path.getsize(out_full_path)
@@ -350,15 +357,23 @@ def main():
         print("\n提示: 未在 input 文件夹中发现新图片。")
     else:
         generate_index_html(all_final_paths)
-        generate_random_api(all_final_paths)
-
+        generate_robots_txt()
+        generate_random_api(all_final_paths, config)
+        
+        # --- 最终统计报告 ---
         total_size_mb = total_size_bytes / (1024 * 1024)
-        print("\n" + "="*30)
-        print(f"📊 图床统计报告")
-        print(f"✅ 图片总数: {len(all_final_paths)} 张")
-        print(f"📦 占用空间: {total_size_mb:.2f} MB")
-        print(f"🚀 部署建议: 直接上传 output 文件夹至 Cloudflare Pages")
-        print("="*30)
+        security_cfg = config.get("security", {})
+        api_key = security_cfg.get('api_key', '')
+        api_status = f"已启用 (/random?key={api_key})" if api_key else "已公开启用 (/random)"
+        
+        print("\n" + "="*40)
+        print(f"📊 图床构建报告")
+        print(f"✅ 处理完毕: 共 {len(all_final_paths)} 张")
+        print(f"📦 预估空间: {total_size_mb:.2f} MB")
+        print(f"🛡️ 隐私防护: robots.txt 已部署")
+        print(f"🎲 随机接口: {api_status}")
+        print(f"🚀 部署操作: 请将 output 目录上传至 Cloudflare Pages")
+        print("="*40)
 
 if __name__ == "__main__":
     main()
