@@ -152,11 +152,9 @@ def generate_cloudflare_worker(image_paths, config):
     security_cfg = config.get("security", {})
     api_key = security_cfg.get("api_key", "")
     
-    # 转换为 JSON 格式字符串以供 JS 安全读取
     safe_api_key = json.dumps(api_key)
     paths_array = json.dumps([f"/{p.replace(os.sep, '/')}" for p in image_paths])
 
-    # 使用普通字符串替换变量，彻底解决 Python f-string 冲突问题
     js_template = """export default {
     async fetch(request, env) {
         const url = new URL(request.url);
@@ -174,11 +172,25 @@ def generate_cloudflare_worker(image_paths, config):
                 }
             }
 
-            if (images.length === 0) {
-                return new Response('Not Found', { status: 404 });
+            // --- 新增：按路径过滤图库 ---
+            let pool = images;
+            const filterPath = url.searchParams.get('path');
+            if (filterPath) {
+                // 规范化路径匹配：确保以 / 开头，以 / 结尾。
+                // 例如传入 "ba" 会规范化为 "/ba/"，确保精准匹配文件夹而不误伤类似 "/ba2/" 的同名开头文件夹。
+                let normalizedPath = filterPath.startsWith('/') ? filterPath : '/' + filterPath;
+                if (!normalizedPath.endsWith('/')) {
+                    normalizedPath += '/';
+                }
+                pool = images.filter(img => img.startsWith(normalizedPath));
+            }
+            // -----------------------------
+
+            if (pool.length === 0) {
+                return new Response('404 Not Found: 指定路径下没有找到图片', { status: 404 });
             }
             
-            const randomImage = images[Math.floor(Math.random() * images.length)];
+            const randomImage = pool[Math.floor(Math.random() * pool.length)];
             const redirectUrl = new URL(randomImage, request.url);
             
             return new Response(null, {
@@ -260,12 +272,11 @@ def generate_cloudflare_worker(image_paths, config):
     }
 };
 """
-    # 执行变量注入
     js_content = js_template.replace("TARGET_KEY_PLACEHOLDER", safe_api_key).replace("PATHS_ARRAY_PLACEHOLDER", paths_array)
 
     with open(worker_path, "w", encoding="utf-8") as f:
         f.write(js_content)
-    print(f"[完成] _worker.js 全站鉴权已生成")
+    print(f"[完成] _worker.js 全站鉴权已生成 (支持路径过滤)")
 
 def generate_routes_json(config):
     """根据是否配置 API Key 动态生成 _routes.json，实现极限省配额"""

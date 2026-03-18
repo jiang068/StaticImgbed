@@ -64,3 +64,21 @@ uv python main.py
 如果设置为空 ""，则任何人都可以直接访问 /random
 如果设置了 (例如 "your_key")，则访问路径需变为 /random?key=your_key
 ```
+- 拼接参数指南
+
+全库随机：
+```
+https://你的域名/random?key=your_key
+```
+
+指定单层目录随机：
+```
+https://你的域名/random?key=your_key&path=ba
+（等同于 &path=/ba 或 &path=/ba/）
+```
+指定多层子目录随机：
+```
+https://你的域名/random?key=your_key&path=wuwa/sub
+```
+
+---
