@@ -19,4 +19,4 @@ env/
 Thumbs.db
 
 # 配置文件
-# config.toml
+config.toml

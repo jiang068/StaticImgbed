@@ -1,0 +1,23 @@
+[image]
+# 出图文件大小限制 (KB)
+max_file_size_kb = 800
+
+# 出图尺寸限制 (最长边的像素值，1920x1080即限制最长边在1920左右)
+max_dimension = 1920
+
+# 图片命名长度 (推荐8位，如果图特别多可以适当调高以防重名)
+name_length = 8
+
+# 是否转换出图格式
+convert_format = true
+
+# 出图格式 (当 convert_format 为 true 时生效)
+output_format = "jpg"
+
+# 起始压缩度 (仅针对 JPG/JPEG，脚本会根据文件大小自动下调)
+jpg_quality = 85
+
+[security]
+# 如果设置为空 ""，则任何人都可以直接访问 /random
+# 如果设置了 (例如 "your_key")，则访问路径需变为 /random?key=your_key
+api_key = "your_key"
