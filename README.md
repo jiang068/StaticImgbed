@@ -52,3 +52,10 @@ uv python main.py
 - **文件总数限制**：单次上传最多 `20,000` 个文件
 
 ---
+
+## 🔀 /random（随机图）
+
+- 访问 /random 返回 302 重定向到一张随机图片（由 `output/_worker.js` 提供）。
+- 生成：运行 `uv python main.py`，脚本会在处理完成后生成 `output/_worker.js`。
+- 部署：将 `output/` 上传到 Cloudflare Pages（需启用 Worker/Functions）。
+- 更新图片后请重新运行脚本并部署以刷新随机集合。
