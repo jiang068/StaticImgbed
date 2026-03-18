@@ -14,9 +14,11 @@ def generate_cloudflare_worker(image_data, config):
     security_cfg = config.get("security", {})
     api_key = security_cfg.get("api_key", "")
     
-    safe_api_key = json.dumps(api_key)
+    # 获取站点标题
+    site_cfg = config.get("site", {})
+    site_title = site_cfg.get("title", "我的图库索引")
     
-    # 构造带有方向属性的对象数组
+    safe_api_key = json.dumps(api_key)
     js_image_data = [
         {
             "path": f"/{item['path'].replace(os.sep, '/')}",
@@ -31,10 +33,8 @@ def generate_cloudflare_worker(image_data, config):
         const url = new URL(request.url);
         const targetKey = TARGET_KEY_PLACEHOLDER;
         const images = PATHS_ARRAY_PLACEHOLDER;
+        const siteTitle = "SITE_TITLE_PLACEHOLDER";
         
-        // ====================
-        // 1. 随机图 API 逻辑 (/random)
-        // ====================
         if (url.pathname === '/random') {
             if (targetKey !== "") {
                 const userKey = url.searchParams.get('key');
@@ -44,8 +44,6 @@ def generate_cloudflare_worker(image_data, config):
             }
 
             let pool = images;
-            
-            // 过滤器 1: 按路径
             const filterPath = url.searchParams.get('path');
             if (filterPath) {
                 let normalizedPath = filterPath.startsWith('/') ? filterPath : '/' + filterPath;
@@ -55,7 +53,6 @@ def generate_cloudflare_worker(image_data, config):
                 pool = pool.filter(img => img.path.startsWith(normalizedPath));
             }
             
-            // 过滤器 2: 按横竖版
             const filterOri = url.searchParams.get('orientation');
             if (filterOri === 'landscape') {
                 pool = pool.filter(img => img.is_landscape);
@@ -80,9 +77,6 @@ def generate_cloudflare_worker(image_data, config):
             });
         }
 
-        // ====================
-        // 2. 页面登录鉴权逻辑
-        // ====================
         if (url.pathname === '/login' && request.method === 'POST') {
             const formData = await request.formData();
             const userKey = formData.get('key');
@@ -96,14 +90,11 @@ def generate_cloudflare_worker(image_data, config):
                     }
                 });
             } else {
-                const errorHtml = `<html lang="zh-CN"><head><meta charset="UTF-8"><title>密码错误</title></head><body style="text-align:center;padding:50px;font-family:sans-serif;"><h2>❌ 暗号错误</h2><a href="/">返回重试</a></body></html>`;
+                const errorHtml = `<html lang="zh-CN"><head><meta charset="UTF-8"><title>密码错误 - ${siteTitle}</title></head><body style="text-align:center;padding:50px;font-family:sans-serif;"><h2>❌ 暗号错误</h2><a href="/">返回重试</a></body></html>`;
                 return new Response(errorHtml, { status: 401, headers: { "Content-Type": "text/html;charset=UTF-8" } });
             }
         }
 
-        // ====================
-        // 3. 静态 HTML 索引保护拦截
-        // ====================
         if (targetKey !== "" && (url.pathname === '/' || url.pathname === '/index.html' || url.pathname.endsWith('.html'))) {
             const cookieHeader = request.headers.get('Cookie') || '';
             const cookies = Object.fromEntries(cookieHeader.split(';').map(c => c.trim().split('=')));
@@ -114,7 +105,7 @@ def generate_cloudflare_worker(image_data, config):
                 <head>
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>图床安全验证</title>
+                    <title>${siteTitle} - 安全验证</title>
                     <style>
                         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f4f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
                         .login-card { background: white; padding: 40px 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); text-align: center; width: 100%; max-width: 320px; }
@@ -127,7 +118,7 @@ def generate_cloudflare_worker(image_data, config):
                 </head>
                 <body>
                     <div class="login-card">
-                        <h2>🔒 图床私密索引</h2>
+                        <h2>🔒 ${siteTitle}</h2>
                         <form method="POST" action="/login">
                             <input type="password" name="key" placeholder="请输入暗号 (API Key)" required autofocus>
                             <button type="submit">解锁图库</button>
@@ -146,10 +137,10 @@ def generate_cloudflare_worker(image_data, config):
     }
 };
 """
-    js_content = js_template.replace("TARGET_KEY_PLACEHOLDER", safe_api_key).replace("PATHS_ARRAY_PLACEHOLDER", paths_array)
+    js_content = js_template.replace("TARGET_KEY_PLACEHOLDER", safe_api_key).replace("PATHS_ARRAY_PLACEHOLDER", paths_array).replace("SITE_TITLE_PLACEHOLDER", site_title)
     with open(worker_path, "w", encoding="utf-8") as f:
         f.write(js_content)
-    print(f"[完成] _worker.js 已生成 (支持多条件组合过滤)")
+    print(f"[完成] _worker.js 已生成 (同步站点标题: {site_title})")
 
 def generate_routes_json(config):
     routes_path = os.path.join(OUTPUT_DIR, "_routes.json")
@@ -202,8 +193,11 @@ def generate_text_links(image_data, config):
                 
     print(f"[完成] TXT 批量链接已生成至 {OUTPUT_TEXT_DIR} 目录")
 
-def generate_index_html(image_data):
-    # 将字典结构解包出路径，兼容老的逻辑
+def generate_index_html(image_data, config):
+    # 获取站点标题
+    site_cfg = config.get("site", {})
+    site_title = site_cfg.get("title", "我的图库索引")
+
     image_paths = [item["path"] for item in image_data]
     
     pages_dir = os.path.join(OUTPUT_DIR, PAGES_DIR_NAME)
@@ -271,7 +265,7 @@ def generate_index_html(image_data):
             '<!DOCTYPE html>', '<html lang="zh-CN">', '<head>',
             '    <meta charset="UTF-8">',
             '    <meta name="viewport" content="width=device-width, initial-scale=1.0">',
-            f'    <title>{group_name} - 图库</title>',
+            f'    <title>{group_name} - {site_title}</title>',
             common_css,
             '</head>', '<body>',
             '    <div class="nav-bar">',
@@ -301,10 +295,10 @@ def generate_index_html(image_data):
         '<!DOCTYPE html>', '<html lang="zh-CN">', '<head>',
         '    <meta charset="UTF-8">',
         '    <meta name="viewport" content="width=device-width, initial-scale=1.0">',
-        '    <title>图床相册索引</title>',
+        f'    <title>{site_title}</title>',
         common_css,
         '</head>', '<body>',
-        '    <h1>🖼️ 我的图库索引</h1>',
+        f'    <h1>🖼️ {site_title}</h1>',
         '    <div class="grid" style="margin-top: 40px;">'
     ]
 
@@ -322,4 +316,4 @@ def generate_index_html(image_data):
     index_path = os.path.join(OUTPUT_DIR, "index.html")
     with open(index_path, "w", encoding="utf-8") as f:
         f.write("\n".join(main_html))
-    print(f"[完成] HTML 静态索引生成完毕")
+    print(f"[完成] HTML 静态索引生成完毕 (同步站点标题: {site_title})")

@@ -42,7 +42,7 @@ def main():
     else:
         print("\n=== 开始生成边缘网络配置与静态资源 ===")
         # 将带有属性的数据传递给各个生成器
-        generate_index_html(all_final_data)
+        generate_index_html(all_final_data, config)
         generate_robots_txt()
         generate_cloudflare_worker(all_final_data, config)
         generate_routes_json(config)

@@ -1,31 +1,17 @@
 [image]
-# 出图文件大小限制 (KB)
-max_file_size_kb = 800
-
-# 出图尺寸限制 (最长边的像素值，1920x1080即限制最长边在1920左右)
-max_dimension = 1920
-
-# 图片命名长度 (推荐8位，如果图特别多可以适当调高以防重名)
-name_length = 8
-
-# 是否转换出图格式
-convert_format = true
-
-# 出图格式 (当 convert_format 为 true 时生效)
-output_format = "jpg"
-
-# 起始压缩度 (仅针对 JPG/JPEG，脚本会根据文件大小自动下调)
-jpg_quality = 85
-
-# 是否将横版图片分离到专属文件夹，false 横版图片也将保持与 input 里一致的目录结构。
-separate_landscape = true
+max_file_size_kb = 800        # 限制单张图片的最大体积 (KB)
+max_dimension = 1920          # 限制图片长边的最大像素值
+name_length = 8               # 统一文件名的随机哈希长度
+convert_format = true         # 是否强制转换输出格式
+output_format = "jpg"         # 强制统一的输出格式 (如 jpg, webp)
+jpg_quality = 85              # JPG 初始压缩率
+separate_landscape = true     # 是否将横版图片分离到专属文件夹
 
 [security]
-# 如果设置为空 ""，则任何人都可以直接访问 /random
-# 如果设置了 (例如 "your_key")，则访问路径需变为 /random?key=your_key
-api_key = "your_key"
+api_key = "your_key"          # 目录鉴权与 API 调用的暗号（留空则全站公开无锁）
 
 [deploy]
-# 你的图床域名，用于生成 TXT 直链文件。
-# 以 http:// 或 https:// 开头，且末尾不要带斜杠 (/)
-base_url = "https://static-imgbed-temp.pages.dev"
+base_url = "https://your-domain.pages.dev" # 图床绑定的域名，用于生成 TXT 直链
+
+[site]
+title = "Kei的图床"           # 网页全局标题
