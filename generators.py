@@ -9,13 +9,22 @@ def generate_robots_txt():
         f.write("User-agent: *\nDisallow: /")
     print("[完成] robots.txt 已生成")
 
-def generate_cloudflare_worker(image_paths, config):
+def generate_cloudflare_worker(image_data, config):
     worker_path = os.path.join(OUTPUT_DIR, "_worker.js")
     security_cfg = config.get("security", {})
     api_key = security_cfg.get("api_key", "")
     
     safe_api_key = json.dumps(api_key)
-    paths_array = json.dumps([f"/{p.replace(os.sep, '/')}" for p in image_paths])
+    
+    # 构造带有方向属性的对象数组
+    js_image_data = [
+        {
+            "path": f"/{item['path'].replace(os.sep, '/')}",
+            "is_landscape": item["is_landscape"]
+        }
+        for item in image_data
+    ]
+    paths_array = json.dumps(js_image_data)
 
     js_template = """export default {
     async fetch(request, env) {
@@ -23,6 +32,9 @@ def generate_cloudflare_worker(image_paths, config):
         const targetKey = TARGET_KEY_PLACEHOLDER;
         const images = PATHS_ARRAY_PLACEHOLDER;
         
+        // ====================
+        // 1. 随机图 API 逻辑 (/random)
+        // ====================
         if (url.pathname === '/random') {
             if (targetKey !== "") {
                 const userKey = url.searchParams.get('key');
@@ -32,21 +44,31 @@ def generate_cloudflare_worker(image_paths, config):
             }
 
             let pool = images;
+            
+            // 过滤器 1: 按路径
             const filterPath = url.searchParams.get('path');
             if (filterPath) {
                 let normalizedPath = filterPath.startsWith('/') ? filterPath : '/' + filterPath;
                 if (!normalizedPath.endsWith('/')) {
                     normalizedPath += '/';
                 }
-                pool = images.filter(img => img.startsWith(normalizedPath));
+                pool = pool.filter(img => img.path.startsWith(normalizedPath));
+            }
+            
+            // 过滤器 2: 按横竖版
+            const filterOri = url.searchParams.get('orientation');
+            if (filterOri === 'landscape') {
+                pool = pool.filter(img => img.is_landscape);
+            } else if (filterOri === 'portrait') {
+                pool = pool.filter(img => !img.is_landscape);
             }
 
             if (pool.length === 0) {
-                return new Response('404 Not Found: 指定路径下没有找到图片', { status: 404 });
+                return new Response('404 Not Found: 指定条件(路径/横竖版)下没有找到图片', { status: 404 });
             }
             
             const randomImage = pool[Math.floor(Math.random() * pool.length)];
-            const redirectUrl = new URL(randomImage, request.url);
+            const redirectUrl = new URL(randomImage.path, request.url);
             
             return new Response(null, {
                 status: 302,
@@ -58,6 +80,9 @@ def generate_cloudflare_worker(image_paths, config):
             });
         }
 
+        // ====================
+        // 2. 页面登录鉴权逻辑
+        // ====================
         if (url.pathname === '/login' && request.method === 'POST') {
             const formData = await request.formData();
             const userKey = formData.get('key');
@@ -76,6 +101,9 @@ def generate_cloudflare_worker(image_paths, config):
             }
         }
 
+        // ====================
+        // 3. 静态 HTML 索引保护拦截
+        // ====================
         if (targetKey !== "" && (url.pathname === '/' || url.pathname === '/index.html' || url.pathname.endsWith('.html'))) {
             const cookieHeader = request.headers.get('Cookie') || '';
             const cookies = Object.fromEntries(cookieHeader.split(';').map(c => c.trim().split('=')));
@@ -121,7 +149,7 @@ def generate_cloudflare_worker(image_paths, config):
     js_content = js_template.replace("TARGET_KEY_PLACEHOLDER", safe_api_key).replace("PATHS_ARRAY_PLACEHOLDER", paths_array)
     with open(worker_path, "w", encoding="utf-8") as f:
         f.write(js_content)
-    print(f"[完成] _worker.js 全站鉴权已生成")
+    print(f"[完成] _worker.js 已生成 (支持多条件组合过滤)")
 
 def generate_routes_json(config):
     routes_path = os.path.join(OUTPUT_DIR, "_routes.json")
@@ -141,7 +169,10 @@ def generate_routes_json(config):
     with open(routes_path, "w", encoding="utf-8") as f:
         json.dump(routes_content, f, indent=4)
 
-def generate_text_links(image_paths, config):
+def generate_text_links(image_data, config):
+    # 将字典结构解包出路径，兼容老的逻辑
+    image_paths = [item["path"] for item in image_data]
+    
     os.makedirs(OUTPUT_TEXT_DIR, exist_ok=True)
     deploy_cfg = config.get("deploy", {})
     base_url = deploy_cfg.get("base_url", "https://your-domain.pages.dev").rstrip("/")
@@ -171,7 +202,10 @@ def generate_text_links(image_paths, config):
                 
     print(f"[完成] TXT 批量链接已生成至 {OUTPUT_TEXT_DIR} 目录")
 
-def generate_index_html(image_paths):
+def generate_index_html(image_data):
+    # 将字典结构解包出路径，兼容老的逻辑
+    image_paths = [item["path"] for item in image_data]
+    
     pages_dir = os.path.join(OUTPUT_DIR, PAGES_DIR_NAME)
     os.makedirs(pages_dir, exist_ok=True)
 

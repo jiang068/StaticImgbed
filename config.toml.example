@@ -17,6 +17,9 @@ output_format = "jpg"
 # 起始压缩度 (仅针对 JPG/JPEG，脚本会根据文件大小自动下调)
 jpg_quality = 85
 
+# 是否将横版图片分离到专属文件夹，false 横版图片也将保持与 input 里一致的目录结构。
+separate_landscape = true
+
 [security]
 # 如果设置为空 ""，则任何人都可以直接访问 /random
 # 如果设置了 (例如 "your_key")，则访问路径需变为 /random?key=your_key

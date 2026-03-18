@@ -20,7 +20,8 @@ def main():
     config = load_config()
     existing_outputs = get_existing_outputs()
     
-    all_final_paths = []
+    # 这里存储的将是字典列表: [{"path": "...", "is_landscape": True}, ...]
+    all_final_data = []
     total_size_bytes = 0
 
     print("=== 开始处理图床图片 ===")
@@ -29,22 +30,23 @@ def main():
             ext = os.path.splitext(file)[1].lower()
             if ext in SUPPORTED_EXTENSIONS:
                 input_path = os.path.join(root, file)
-                result_path = process_image(input_path, config, existing_outputs)
-                if result_path:
-                    all_final_paths.append(result_path)
-                    out_full_path = os.path.join(OUTPUT_DIR, result_path.replace("/", os.sep))
+                result_data = process_image(input_path, config, existing_outputs)
+                if result_data:
+                    all_final_data.append(result_data)
+                    out_full_path = os.path.join(OUTPUT_DIR, result_data["path"].replace("/", os.sep))
                     if os.path.exists(out_full_path):
                         total_size_bytes += os.path.getsize(out_full_path)
 
-    if not all_final_paths:
+    if not all_final_data:
         print("\n提示: 未在 input 文件夹中发现新图片。")
     else:
         print("\n=== 开始生成边缘网络配置与静态资源 ===")
-        generate_index_html(all_final_paths)
+        # 将带有属性的数据传递给各个生成器
+        generate_index_html(all_final_data)
         generate_robots_txt()
-        generate_cloudflare_worker(all_final_paths, config)
+        generate_cloudflare_worker(all_final_data, config)
         generate_routes_json(config)
-        generate_text_links(all_final_paths, config)
+        generate_text_links(all_final_data, config)
         
         # --- 最终统计报告 ---
         total_size_mb = total_size_bytes / (1024 * 1024)
@@ -56,7 +58,7 @@ def main():
         
         print("\n" + "="*40)
         print(f"📊 图床构建报告")
-        print(f"✅ 处理完毕: 共 {len(all_final_paths)} 张")
+        print(f"✅ 处理完毕: 共 {len(all_final_data)} 张")
         print(f"📦 预估空间: {total_size_mb:.2f} MB")
         print(f"🛡️ 全站鉴权: {auth_status}")
         print(f"🎲 随机接口: {api_status}")

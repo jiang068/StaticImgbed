@@ -4,7 +4,6 @@ import hashlib
 import shutil
 from PIL import Image
 
-# 导入基础配置常量
 from config import INPUT_DIR, OUTPUT_DIR, LANDSCAPE_DIR_NAME
 
 def get_file_hash(filepath, length):
@@ -34,17 +33,20 @@ def process_image(input_path, config, existing_outputs):
     img_cfg = config["image"]
     img_name = get_file_hash(input_path, img_cfg["name_length"])
     
-    if img_name in existing_outputs:
-        print(f"[跳过] 已存在: {input_path} -> {existing_outputs[img_name]}")
-        return existing_outputs[img_name]
-
     try:
         file_size_kb = os.path.getsize(input_path) / 1024
         original_ext = os.path.splitext(input_path)[1].lower()
         
+        # 懒加载获取宽高，非常快
         img = Image.open(input_path)
         width, height = img.size
         is_landscape = width >= height
+
+        # 如果命中缓存，直接返回字典结构并关闭图片
+        if img_name in existing_outputs:
+            print(f"[跳过] 已存在: {input_path} -> {existing_outputs[img_name]}")
+            img.close()
+            return {"path": existing_outputs[img_name], "is_landscape": is_landscape}
 
         format_ok = True
         out_ext = original_ext
@@ -63,7 +65,10 @@ def process_image(input_path, config, existing_outputs):
         size_ok = file_size_kb <= img_cfg["max_file_size_kb"]
         dimension_ok = max(width, height) <= img_cfg["max_dimension"]
 
-        if is_landscape:
+        # --- 新增：读取配置判断是否分离横图 ---
+        separate_landscape = img_cfg.get("separate_landscape", True)
+
+        if separate_landscape and is_landscape:
             out_rel_dir = LANDSCAPE_DIR_NAME
         else:
             rel_input_dir = os.path.relpath(os.path.dirname(input_path), INPUT_DIR)
@@ -80,7 +85,7 @@ def process_image(input_path, config, existing_outputs):
             
             final_rel_path = os.path.relpath(out_filepath, OUTPUT_DIR).replace(os.sep, "/")
             existing_outputs[img_name] = final_rel_path
-            return final_rel_path
+            return {"path": final_rel_path, "is_landscape": is_landscape}
 
         if img.mode in ("RGBA", "P") and out_ext in (".jpg", ".jpeg"):
             img = img.convert("RGB")
@@ -112,7 +117,8 @@ def process_image(input_path, config, existing_outputs):
         
         final_rel_path = os.path.relpath(out_filepath, OUTPUT_DIR).replace(os.sep, "/")
         existing_outputs[img_name] = final_rel_path
-        return final_rel_path
+        
+        return {"path": final_rel_path, "is_landscape": is_landscape}
 
     except Exception as e:
         print(f"[错误] 处理 {input_path} 失败: {e}")
