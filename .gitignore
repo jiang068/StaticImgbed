@@ -8,6 +8,7 @@ input/
 
 # 忽略输出目录（部署时手动上传）
 output/
+output_text/
 
 # 忽略本地虚拟环境
 venv/
