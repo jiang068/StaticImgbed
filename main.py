@@ -31,7 +31,6 @@ def load_config():
         return tomllib.load(f)
 
 def get_file_hash(filepath, length):
-    """通过读取文件内容计算哈希，作为唯一且固定的文件名"""
     hasher = hashlib.md5()
     with open(filepath, 'rb') as f:
         buf = f.read(65536)
@@ -41,15 +40,13 @@ def get_file_hash(filepath, length):
     return hasher.hexdigest()[:length]
 
 def get_existing_outputs():
-    """扫描输出目录，建立已经处理过的图片索引，避免重复计算"""
     existing = {}
     if not os.path.exists(OUTPUT_DIR):
         return existing
     
     for root, _, files in os.walk(OUTPUT_DIR):
         for file in files:
-            # 忽略非图片文件
-            if file.endswith((".html", ".js", ".txt")):
+            if file.endswith((".html", ".js", ".json", ".txt")):
                 continue
             name_without_ext = os.path.splitext(file)[0]
             rel_path = os.path.relpath(os.path.join(root, file), OUTPUT_DIR)
@@ -57,11 +54,9 @@ def get_existing_outputs():
     return existing
 
 def process_image(input_path, config, existing_outputs):
-    """核心图片处理逻辑"""
     img_cfg = config["image"]
     img_name = get_file_hash(input_path, img_cfg["name_length"])
     
-    # 命中缓存：文件内容未变，直接返回已有路径
     if img_name in existing_outputs:
         print(f"[跳过] 已存在: {input_path} -> {existing_outputs[img_name]}")
         return existing_outputs[img_name]
@@ -70,12 +65,10 @@ def process_image(input_path, config, existing_outputs):
         file_size_kb = os.path.getsize(input_path) / 1024
         original_ext = os.path.splitext(input_path)[1].lower()
         
-        # 懒加载：获取宽高等元数据
         img = Image.open(input_path)
         width, height = img.size
         is_landscape = width >= height
 
-        # 检查格式是否一致
         format_ok = True
         out_ext = original_ext
         
@@ -93,7 +86,6 @@ def process_image(input_path, config, existing_outputs):
         size_ok = file_size_kb <= img_cfg["max_file_size_kb"]
         dimension_ok = max(width, height) <= img_cfg["max_dimension"]
 
-        # 确定输出子目录
         if is_landscape:
             out_rel_dir = LANDSCAPE_DIR_NAME
         else:
@@ -104,7 +96,6 @@ def process_image(input_path, config, existing_outputs):
         os.makedirs(out_dir, exist_ok=True)
         out_filepath = os.path.join(out_dir, f"{img_name}{out_ext}")
 
-        # 优化：免压缩直接物理复制
         if format_ok and size_ok and dimension_ok:
             img.close()
             shutil.copy2(input_path, out_filepath)
@@ -114,7 +105,6 @@ def process_image(input_path, config, existing_outputs):
             existing_outputs[img_name] = final_rel_path
             return final_rel_path
 
-        # 需要重新编码的流程
         if img.mode in ("RGBA", "P") and out_ext in (".jpg", ".jpeg"):
             img = img.convert("RGB")
 
@@ -152,61 +142,162 @@ def process_image(input_path, config, existing_outputs):
         return None
 
 def generate_robots_txt():
-    """生成 robots.txt 以明确禁止所有爬虫抓取"""
     robots_path = os.path.join(OUTPUT_DIR, "robots.txt")
     with open(robots_path, "w", encoding="utf-8") as f:
         f.write("User-agent: *\nDisallow: /")
-    print("\n[完成] robots.txt 已生成")
+    print("[完成] robots.txt 已生成")
 
-def generate_random_api(image_paths, config):
-    """生成 Cloudflare Pages 高级模式 (_worker.js)"""
+def generate_cloudflare_worker(image_paths, config):
     worker_path = os.path.join(OUTPUT_DIR, "_worker.js")
     security_cfg = config.get("security", {})
     api_key = security_cfg.get("api_key", "")
     
+    # 转换为 JSON 格式字符串以供 JS 安全读取
+    safe_api_key = json.dumps(api_key)
     paths_array = json.dumps([f"/{p.replace(os.sep, '/')}" for p in image_paths])
 
-    js_content = f"""export default {{
-    async fetch(request, env) {{
+    # 使用普通字符串替换变量，彻底解决 Python f-string 冲突问题
+    js_template = """export default {
+    async fetch(request, env) {
         const url = new URL(request.url);
+        const targetKey = TARGET_KEY_PLACEHOLDER;
+        const images = PATHS_ARRAY_PLACEHOLDER;
         
-        if (url.pathname === '/random') {{
-            const targetKey = "{api_key}";
-            if (targetKey !== "") {{
+        // ====================
+        // 1. 随机图 API 逻辑 (/random)
+        // ====================
+        if (url.pathname === '/random') {
+            if (targetKey !== "") {
                 const userKey = url.searchParams.get('key');
-                if (userKey !== targetKey) {{
-                    return new Response('401 Unauthorized', {{ status: 401 }});
-                }}
-            }}
+                if (userKey !== targetKey) {
+                    return new Response('401 Unauthorized: 暗号错误', { status: 401 });
+                }
+            }
 
-            const images = {paths_array};
-            if (images.length === 0) {{
-                return new Response('Not Found', {{ status: 404 }});
-            }}
+            if (images.length === 0) {
+                return new Response('Not Found', { status: 404 });
+            }
             
             const randomImage = images[Math.floor(Math.random() * images.length)];
             const redirectUrl = new URL(randomImage, request.url);
             
-            return new Response(null, {{
+            return new Response(null, {
                 status: 302,
-                headers: {{
+                headers: {
                     "Location": redirectUrl.toString(),
                     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                     "Pragma": "no-cache"
-                }}
-            }});
-        }}
-        
+                }
+            });
+        }
+
+        // ====================
+        // 2. 页面登录鉴权逻辑 (拦截提交密码的 POST 请求)
+        // ====================
+        if (url.pathname === '/login' && request.method === 'POST') {
+            const formData = await request.formData();
+            const userKey = formData.get('key');
+            
+            if (userKey === targetKey) {
+                return new Response(null, {
+                    status: 302,
+                    headers: {
+                        "Location": "/",
+                        "Set-Cookie": `auth_session=${encodeURIComponent(targetKey)}; Path=/; HttpOnly; Max-Age=2592000`
+                    }
+                });
+            } else {
+                const errorHtml = `<html lang="zh-CN"><head><meta charset="UTF-8"><title>密码错误</title></head><body style="text-align:center;padding:50px;font-family:sans-serif;"><h2>❌ 暗号错误</h2><a href="/">返回重试</a></body></html>`;
+                return new Response(errorHtml, { status: 401, headers: { "Content-Type": "text/html;charset=UTF-8" } });
+            }
+        }
+
+        // ====================
+        // 3. 静态 HTML 索引保护拦截 (防偷窥目录)
+        // ====================
+        if (targetKey !== "" && (url.pathname === '/' || url.pathname === '/index.html' || url.pathname.endsWith('.html'))) {
+            const cookieHeader = request.headers.get('Cookie') || '';
+            const cookies = Object.fromEntries(cookieHeader.split(';').map(c => c.trim().split('=')));
+            
+            if (decodeURIComponent(cookies['auth_session'] || '') !== targetKey) {
+                const loginHtml = `<!DOCTYPE html>
+                <html lang="zh-CN">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>图床安全验证</title>
+                    <style>
+                        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f4f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                        .login-card { background: white; padding: 40px 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); text-align: center; width: 100%; max-width: 320px; }
+                        .login-card h2 { margin-top: 0; color: #333; margin-bottom: 25px; font-size: 22px; }
+                        input { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 16px; transition: 0.2s; }
+                        input:focus { border-color: #007bff; outline: none; box-shadow: 0 0 0 3px rgba(0,123,255,0.1); }
+                        button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+                        button:hover { background: #0056b3; }
+                    </style>
+                </head>
+                <body>
+                    <div class="login-card">
+                        <h2>🔒 图床私密索引</h2>
+                        <form method="POST" action="/login">
+                            <input type="password" name="key" placeholder="请输入暗号 (API Key)" required autofocus>
+                            <button type="submit">解锁图库</button>
+                        </form>
+                    </div>
+                </body>
+                </html>`;
+                
+                return new Response(loginHtml, {
+                    headers: { "Content-Type": "text/html;charset=UTF-8" }
+                });
+            }
+        }
+
+        // ====================
+        // 4. 其他资源（如直接访问图片）放行
+        // ====================
         return env.ASSETS.fetch(request);
-    }}
-}};
+    }
+};
 """
+    # 执行变量注入
+    js_content = js_template.replace("TARGET_KEY_PLACEHOLDER", safe_api_key).replace("PATHS_ARRAY_PLACEHOLDER", paths_array)
+
     with open(worker_path, "w", encoding="utf-8") as f:
         f.write(js_content)
-    print(f"[完成] _worker.js 动态路由已生成")
+    print(f"[完成] _worker.js 全站鉴权已生成")
+
+def generate_routes_json(config):
+    """根据是否配置 API Key 动态生成 _routes.json，实现极限省配额"""
+    routes_path = os.path.join(OUTPUT_DIR, "_routes.json")
+    security_cfg = config.get("security", {})
+    api_key = security_cfg.get("api_key", "")
+    
+    # /random 无论如何都是动态 API，必须经过 Worker
+    includes = ["/random"]
+    
+    # 只有在设置了暗号时，才将网页请求路由给 Worker 进行拦截
+    if api_key != "":
+        includes.extend([
+            "/",
+            "/index.html",
+            "/pages/*",
+            "/login"
+        ])
+
+    routes_content = {
+        "version": 1,
+        "include": includes,
+        "exclude": []
+    }
+    
+    with open(routes_path, "w", encoding="utf-8") as f:
+        json.dump(routes_content, f, indent=4)
+        
+    mode = "HTML受保护" if api_key else "HTML纯公开直连"
+    print(f"[完成] _routes.json 路由规划已生成 ({mode})")
 
 def generate_index_html(image_paths):
-    """生成主页索引及分页子页面"""
     pages_dir = os.path.join(OUTPUT_DIR, PAGES_DIR_NAME)
     os.makedirs(pages_dir, exist_ok=True)
 
@@ -331,6 +422,10 @@ def generate_index_html(image_paths):
     print(f"[完成] HTML 静态索引生成完毕")
 
 def main():
+    print("\n" + "="*40)
+    print("🚀 CFPages 图床自动化脚本启动")
+    print("="*40 + "\n")
+    
     os.makedirs(INPUT_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -356,24 +451,29 @@ def main():
     if not all_final_paths:
         print("\n提示: 未在 input 文件夹中发现新图片。")
     else:
+        print("\n=== 开始生成边缘网络配置与静态索引 ===")
         generate_index_html(all_final_paths)
         generate_robots_txt()
-        generate_random_api(all_final_paths, config)
+        generate_cloudflare_worker(all_final_paths, config)
+        generate_routes_json(config)
         
         # --- 最终统计报告 ---
         total_size_mb = total_size_bytes / (1024 * 1024)
         security_cfg = config.get("security", {})
         api_key = security_cfg.get('api_key', '')
-        api_status = f"已启用 (/random?key={api_key})" if api_key else "已公开启用 (/random)"
+        
+        api_status = f"已启用 (需暗号解锁)" if api_key else "已启用 (公开)"
+        auth_status = "已加密" if api_key else "公开无锁"
         
         print("\n" + "="*40)
         print(f"📊 图床构建报告")
         print(f"✅ 处理完毕: 共 {len(all_final_paths)} 张")
         print(f"📦 预估空间: {total_size_mb:.2f} MB")
-        print(f"🛡️ 隐私防护: robots.txt 已部署")
+        print(f"🛡️ 全站鉴权: {auth_status}")
         print(f"🎲 随机接口: {api_status}")
+        print(f"⚡ 额度优化: _routes.json 已应用")
         print(f"🚀 部署操作: 请将 output 目录上传至 Cloudflare Pages")
-        print("="*40)
+        print("="*40 + "\n")
 
 if __name__ == "__main__":
     main()

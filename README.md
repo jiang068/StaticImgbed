@@ -59,3 +59,8 @@ uv python main.py
 - 生成：运行 `uv python main.py`，脚本会在处理完成后生成 `output/_worker.js`。
 - 部署：将 `output/` 上传到 Cloudflare Pages（需启用 Worker/Functions）。
 - 更新图片后请重新运行脚本并部署以刷新随机集合。
+- 如果配置了 key 请在config.toml配置调用的key。
+```
+如果设置为空 ""，则任何人都可以直接访问 /random
+如果设置了 (例如 "your_key")，则访问路径需变为 /random?key=your_key
+```
