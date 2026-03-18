@@ -18,6 +18,7 @@ except ImportError:
 # --- 目录常量 ---
 INPUT_DIR = "input"
 OUTPUT_DIR = "output"
+OUTPUT_TEXT_DIR = "output_text"  # 新增：TXT 链接输出目录
 PAGES_DIR_NAME = "pages"
 LANDSCAPE_DIR_NAME = "landscape"
 CONFIG_FILE = "config.toml"
@@ -172,19 +173,15 @@ def generate_cloudflare_worker(image_paths, config):
                 }
             }
 
-            // --- 新增：按路径过滤图库 ---
             let pool = images;
             const filterPath = url.searchParams.get('path');
             if (filterPath) {
-                // 规范化路径匹配：确保以 / 开头，以 / 结尾。
-                // 例如传入 "ba" 会规范化为 "/ba/"，确保精准匹配文件夹而不误伤类似 "/ba2/" 的同名开头文件夹。
                 let normalizedPath = filterPath.startsWith('/') ? filterPath : '/' + filterPath;
                 if (!normalizedPath.endsWith('/')) {
                     normalizedPath += '/';
                 }
                 pool = images.filter(img => img.startsWith(normalizedPath));
             }
-            // -----------------------------
 
             if (pool.length === 0) {
                 return new Response('404 Not Found: 指定路径下没有找到图片', { status: 404 });
@@ -204,7 +201,7 @@ def generate_cloudflare_worker(image_paths, config):
         }
 
         // ====================
-        // 2. 页面登录鉴权逻辑 (拦截提交密码的 POST 请求)
+        // 2. 页面登录鉴权逻辑
         // ====================
         if (url.pathname === '/login' && request.method === 'POST') {
             const formData = await request.formData();
@@ -225,7 +222,7 @@ def generate_cloudflare_worker(image_paths, config):
         }
 
         // ====================
-        // 3. 静态 HTML 索引保护拦截 (防偷窥目录)
+        // 3. 静态 HTML 索引保护拦截
         // ====================
         if (targetKey !== "" && (url.pathname === '/' || url.pathname === '/index.html' || url.pathname.endsWith('.html'))) {
             const cookieHeader = request.headers.get('Cookie') || '';
@@ -265,9 +262,6 @@ def generate_cloudflare_worker(image_paths, config):
             }
         }
 
-        // ====================
-        // 4. 其他资源（如直接访问图片）放行
-        // ====================
         return env.ASSETS.fetch(request);
     }
 };
@@ -276,18 +270,14 @@ def generate_cloudflare_worker(image_paths, config):
 
     with open(worker_path, "w", encoding="utf-8") as f:
         f.write(js_content)
-    print(f"[完成] _worker.js 全站鉴权已生成 (支持路径过滤)")
+    print(f"[完成] _worker.js 全站鉴权已生成")
 
 def generate_routes_json(config):
-    """根据是否配置 API Key 动态生成 _routes.json，实现极限省配额"""
     routes_path = os.path.join(OUTPUT_DIR, "_routes.json")
     security_cfg = config.get("security", {})
     api_key = security_cfg.get("api_key", "")
     
-    # /random 无论如何都是动态 API，必须经过 Worker
     includes = ["/random"]
-    
-    # 只有在设置了暗号时，才将网页请求路由给 Worker 进行拦截
     if api_key != "":
         includes.extend([
             "/",
@@ -304,9 +294,6 @@ def generate_routes_json(config):
     
     with open(routes_path, "w", encoding="utf-8") as f:
         json.dump(routes_content, f, indent=4)
-        
-    mode = "HTML受保护" if api_key else "HTML纯公开直连"
-    print(f"[完成] _routes.json 路由规划已生成 ({mode})")
 
 def generate_index_html(image_paths):
     pages_dir = os.path.join(OUTPUT_DIR, PAGES_DIR_NAME)
@@ -365,7 +352,6 @@ def generate_index_html(image_paths):
 
     group_html_map = {}
     
-    # 1. 生成子页面
     for group_name in sorted(groups.keys()):
         safe_filename = group_name.replace("/", "_").replace("\\", "_") + ".html"
         group_html_map[group_name] = safe_filename
@@ -402,7 +388,6 @@ def generate_index_html(image_paths):
         with open(page_path, "w", encoding="utf-8") as f:
             f.write("\n".join(html))
 
-    # 2. 生成主页
     main_html = [
         '<!DOCTYPE html>', '<html lang="zh-CN">', '<head>',
         '    <meta charset="UTF-8">',
@@ -429,8 +414,52 @@ def generate_index_html(image_paths):
     index_path = os.path.join(OUTPUT_DIR, "index.html")
     with open(index_path, "w", encoding="utf-8") as f:
         f.write("\n".join(main_html))
+
+# ==========================================
+# 新增功能：生成全目录结构的 txt 直链文件
+# ==========================================
+def generate_text_links(image_paths, config):
+    """
+    根据 output 的目录结构，在 output_text 中生成对应的 txt 链接列表
+    """
+    os.makedirs(OUTPUT_TEXT_DIR, exist_ok=True)
+    
+    deploy_cfg = config.get("deploy", {})
+    # 默认加上一个备用前缀，防止用户没配置
+    base_url = deploy_cfg.get("base_url", "https://your-domain.pages.dev").rstrip("/")
+    
+    # 按照目录结构对图片路径进行分组
+    groups = {}
+    for path in image_paths:
+        dirname = os.path.dirname(path)
+        group_key = dirname if dirname else ""
+            
+        if group_key not in groups:
+            groups[group_key] = []
+        groups[group_key].append(path)
         
-    print(f"[完成] HTML 静态索引生成完毕")
+    for group_key, paths in groups.items():
+        if group_key == "":
+            # 根目录的图片，直接放在 output_text/根目录.txt 中
+            target_dir = OUTPUT_TEXT_DIR
+            txt_filename = "根目录.txt"
+        else:
+            # 创建与 output 对应的子目录结构
+            target_dir = os.path.join(OUTPUT_TEXT_DIR, group_key.replace("/", os.sep))
+            os.makedirs(target_dir, exist_ok=True)
+            # 文件名为该层子目录的名称，例如: output_text/landscape/landscape.txt
+            txt_filename = f"{os.path.basename(group_key)}.txt"
+            
+        txt_filepath = os.path.join(target_dir, txt_filename)
+        
+        with open(txt_filepath, "w", encoding="utf-8") as f:
+            for p in paths:
+                # 拼接完整的绝对 URL
+                url_path = p.replace(os.sep, "/")
+                f.write(f"{base_url}/{url_path}\n")
+                
+    print(f"[完成] TXT 批量链接已生成至 {OUTPUT_TEXT_DIR} 目录")
+
 
 def main():
     print("\n" + "="*40)
@@ -468,6 +497,9 @@ def main():
         generate_cloudflare_worker(all_final_paths, config)
         generate_routes_json(config)
         
+        # 调用新增的 TXT 导出功能
+        generate_text_links(all_final_paths, config)
+        
         # --- 最终统计报告 ---
         total_size_mb = total_size_bytes / (1024 * 1024)
         security_cfg = config.get("security", {})
@@ -482,7 +514,7 @@ def main():
         print(f"📦 预估空间: {total_size_mb:.2f} MB")
         print(f"🛡️ 全站鉴权: {auth_status}")
         print(f"🎲 随机接口: {api_status}")
-        print(f"⚡ 额度优化: _routes.json 已应用")
+        print(f"📝 链接导出: {OUTPUT_TEXT_DIR} 目录已就绪")
         print(f"🚀 部署操作: 请将 output 目录上传至 Cloudflare Pages")
         print("="*40 + "\n")
 

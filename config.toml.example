@@ -21,3 +21,8 @@ jpg_quality = 85
 # 如果设置为空 ""，则任何人都可以直接访问 /random
 # 如果设置了 (例如 "your_key")，则访问路径需变为 /random?key=your_key
 api_key = "your_key"
+
+[deploy]
+# 你的图床域名，用于生成 TXT 直链文件。
+# 以 http:// 或 https:// 开头，且末尾不要带斜杠 (/)
+base_url = "https://static-imgbed-temp.pages.dev"
